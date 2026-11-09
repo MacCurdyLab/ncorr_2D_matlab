@@ -108,7 +108,7 @@ classdef ncorr < handle
 %-------------------------------------------------------------------------%
 %-------------------------------------------------------------------------%
 
-    properties (SetAccess = private)   
+    properties (Access = public)   
         % GUI handles:
         handles_gui;
         
@@ -120,6 +120,7 @@ classdef ncorr < handle
         % Installation data:
         support_openmp;
         total_cores;
+        headless = false;             % When true, suppresses blocking msgbox at end of DIC analysis (for batch automation)
     end
     
     % Constructor    
@@ -230,7 +231,8 @@ classdef ncorr < handle
                                                    'plot_eyy_cur_formatted',{}, ...                                          % Exy Eulerian-Almansi strain plot 
                                                    'roi_cur_formatted',{}), ...                                              % ROI used for plotting strains                          
                                   'straininfo',struct('radius',{}, ...                                                       % Strain radius used for calculating strains
-                                                      'subsettrunc',{}));                                                    % Indicates whether or not to implement subset truncation for strain analysis                
+                                                      'subsettrunc',{}), ...
+                                  'seedinfo',struct('paramvector',{},'num_region',{},'num_thread',{},'computepoints',{}));            % Seed info captured from setup run (batch automation)
                                        
             % Appdata - setting these to '[]' technically does nothing, but
             % it is included here to show what appdata are/will be present in the
@@ -1287,9 +1289,27 @@ classdef ncorr < handle
                     % Store displacements
                     obj.data_dic.displacements(i+1) = displacements_template(i+1);   
                 end
+                % Store seedinfo for batch pipeline reuse (added for automation)
+                obj.data_dic.seedinfo = seedinfo_buffer;
+
+                % Cache batch-pipeline data at root appdata level.
+                % The ncorr handle object is INVALID after the figure closes,
+                % so ncorr_batch_setup reads from this cache instead.
+                try
+                    ncorr_batch_cache_ = struct();
+                    ncorr_batch_cache_.seedinfo   = seedinfo_buffer;
+                    ncorr_batch_cache_.dispinfo   = obj.data_dic.dispinfo;
+                    ncorr_batch_cache_.roi_mask   = obj.reference.roi.mask;
+                    ncorr_batch_cache_.straininfo = obj.data_dic.straininfo;
+                    setappdata(0, 'ncorr_batch_pipeline_cache_', ncorr_batch_cache_);
+                catch ncorr_cache_err_
+                    warning('ncorr: batch pipeline cache failed: %s', ncorr_cache_err_.message);
+                end
 
                 % Tell user analysis is done
-                msgbox('DIC Analysis completed successfully. Press ok to finish.','WindowStyle','modal');
+                if (~obj.headless)
+                    msgbox('DIC Analysis completed successfully. Press ok to finish.','WindowStyle','modal');
+                end
             end    
         end
         
@@ -1664,6 +1684,16 @@ classdef ncorr < handle
             end
             obj.data_dic.straininfo(1).radius = radius_strain_prelim;
             obj.data_dic.straininfo(1).subsettrunc = subsettrunc_prelim;
+
+            % Refresh batch pipeline cache with updated straininfo
+            try
+                ncorr_batch_cache_ = getappdata(0, 'ncorr_batch_pipeline_cache_');
+                if ~isempty(ncorr_batch_cache_)
+                    ncorr_batch_cache_.straininfo = obj.data_dic.straininfo;
+                    setappdata(0, 'ncorr_batch_pipeline_cache_', ncorr_batch_cache_);
+                end
+            catch
+            end
 
             % Tell user calculating strains was successful
             msgbox('Strains calculation complete. Press ok to finish.','WindowStyle','modal');
